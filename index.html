@@ -1,0 +1,751 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Koalitionsrechner + Prognose + Stichwahl</title>
+
+<!-- Chart.js + Datalabels -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0"></script>
+
+<style>
+  :root{
+    --bg:#071224; --card:#0e2538; --muted:#9fb0c9; --ink:#eaf4ff;
+    --ok:#37d07a; --bad:#ff6a6a; --radius:12px;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; padding:18px; font-family:Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial;
+    background:linear-gradient(180deg,#061022 0%, #071224 100%); color:var(--ink);
+  }
+  h1{margin:0 0 6px; font-size:20px}
+  p.lead{margin:0 0 18px; color:var(--muted)}
+  .layout{display:grid; grid-template-columns:360px 1fr; gap:16px;}
+  @media (max-width:980px){ .layout{grid-template-columns:1fr} }
+
+  .card{
+    background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+    border-radius:var(--radius); padding:14px; border:1px solid rgba(255,255,255,0.04);
+  }
+  label{display:block; font-size:13px; color:var(--muted); margin-bottom:6px}
+  .row{display:flex; gap:8px; align-items:center; margin-bottom:10px}
+  input[type="text"], input[type="number"], select {
+    width:100%; padding:8px 10px; border-radius:10px; border:1px solid rgba(255,255,255,0.06);
+    background:#07182a; color:var(--ink);
+  }
+  input[type="color"]{width:48px; height:36px; padding:0; border-radius:8px; border:1px solid rgba(255,255,255,0.06)}
+  button{padding:8px 12px; border-radius:10px; border:none; cursor:pointer; background:#0b4a78; color:var(--ink); font-weight:700}
+  button.secondary{background:#0c283b}
+  .small{font-size:13px; color:var(--muted)}
+
+  /* party rows */
+  .party-list{display:flex; flex-direction:column; gap:8px; max-height:320px; overflow:auto; padding-right:6px}
+  .party-row{display:grid; grid-template-columns:28px 1fr 70px 54px 40px; gap:8px; align-items:center; padding:6px; border-radius:10px}
+  .party-row input[type="text"]{font-weight:700}
+  .party-actions{display:flex; gap:6px; align-items:center}
+
+  /* legend / pills */
+  .legend{display:flex; gap:8px; flex-wrap:wrap; margin-top:8px}
+  .legend .item{display:flex; gap:8px; align-items:center; padding:6px 10px; border-radius:999px; background:#071827; border:1px solid rgba(255,255,255,0.03)}
+
+  /* seat svg */
+  #seatChart{width:100%; height:360px; display:block}
+
+  /* controls bottom */
+  .controls{display:flex; gap:8px; flex-wrap:wrap; margin-top:8px}
+
+  /* ARD Overlay / Prognose area */
+  .forecast-wrap{display:flex; flex-direction:column; gap:10px}
+  .forecast-canvas{height:320px; background:transparent; border-radius:10px; padding:8px}
+  .chart-area{background:linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.00)); padding:12px; border-radius:10px}
+
+  /* Stichwahl */
+  .runoff{margin-top:12px; display:flex; flex-direction:column; gap:10px}
+  .runoff-slot{display:flex; gap:12px; align-items:center}
+  .runoff-bar{flex:1; height:36px; border-radius:999px; background:#0a1622; overflow:hidden; position:relative; border:1px solid rgba(255,255,255,0.04)}
+  .runoff-fill{position:absolute; left:0; top:0; bottom:0; width:0%; transition:width .9s cubic-bezier(.2,.8,.2,1)}
+  .runoff-label{position:absolute; left:8px; top:50%; transform:translateY(-50%); font-weight:800; color:var(--ink); text-shadow:0 1px 0 rgba(0,0,0,0.4)}
+  .runoff-controls{display:flex; gap:8px; align-items:center}
+  .muted{color:var(--muted); font-size:13px}
+
+  /* small helpers */
+  .flex{display:flex; gap:8px}
+  .right{margin-left:auto}
+  .switch{display:inline-flex; align-items:center; gap:8px; font-size:13px; color:var(--muted)}
+</style>
+</head>
+<body>
+  <h1>Koalitionsrechner • Prognose • Stichwahl</h1>
+  <p class="lead">Kombiniertes Tool: Prognose (Säulen), Koalitionsrechner mit Sitzverteilung und eine optionale Stichwahl (2 Kandidaten). Alles in einer Datei — direkt für GitHub Pages.</p>
+
+  <div class="layout">
+    <!-- LEFT: Inputs -->
+    <section class="card">
+      <h3 style="margin:0 0 8px">Parteien & Einstellungen</h3>
+      <div class="small muted">Gib Parteien in der gewünschten Reihenfolge ein – die Prognose spielt die Säulen in dieser Reihenfolge ab.</div>
+
+      <div style="margin-top:10px">
+        <label>Gesamtsitze (Bundestag)</label>
+        <input id="totalSeats" type="number" value="630" min="1">
+      </div>
+      <div style="margin-top:8px">
+        <label>Sperrklausel (%)</label>
+        <input id="threshold" type="number" value="5" step="0.1" min="0" max="100">
+      </div>
+
+      <div style="margin-top:10px">
+        <label>Parteien (Name, % , Farbe)</label>
+        <div class="party-list" id="partyList"></div>
+        <div style="display:flex; gap:8px; margin-top:8px">
+          <button id="addParty">+ Partei hinzufügen</button>
+          <button id="resetDefault" class="secondary">Defaults</button>
+        </div>
+      </div>
+
+      <hr style="border:none;border-top:1px solid rgba(255,255,255,0.04); margin:12px 0">
+
+      <h4 style="margin:4px 0 8px">Historische Presets</h4>
+      <select id="historyPreset"></select>
+      <div style="display:flex; gap:8px; margin-top:8px">
+        <button id="loadPreset" class="">Laden</button>
+        <input id="fileIn" type="file" accept=".csv,.json" style="flex:1">
+      </div>
+
+      <hr style="border:none;border-top:1px solid rgba(255,255,255,0.04); margin:12px 0">
+
+      <h4 style="margin:4px 0 8px">Koalitions-Tools</h4>
+      <div class="muted">Vordefinierte Koalitionen zum schnellen Ausprobieren.</div>
+      <select id="presetCoal">
+        <option value="">— wählen —</option>
+      </select>
+      <div style="margin-top:8px" id="coalitionChecklist"></div>
+
+      <div class="legend" style="margin-top:10px" id="legend"></div>
+
+      <div style="margin-top:12px" class="small muted">
+        Mehrheitsschwelle: <strong id="majorityLbl">316</strong> • Koalitionssitze: <strong id="coalSeats">0</strong> • Mehrheit: <strong id="coalMajor" class="bad">nein</strong>
+      </div>
+    </section>
+
+    <!-- RIGHT: Visuals -->
+    <section class="card">
+      <!-- PROGNOSEN (Chart) -->
+      <div class="chart-area">
+        <div style="display:flex; align-items:center; gap:12px;">
+          <h3 style="margin:0">Prognose</h3>
+          <div class="muted">Per Klick läuft jeweils die nächste Säule hoch (Eingabereihenfolge).</div>
+          <div class="right">
+            <button id="openForecast" class="secondary">Öffnen</button>
+            <button id="autoPlay" class="">Auto ▶</button>
+            <button id="resetPlay" class="secondary">Reset</button>
+          </div>
+        </div>
+
+        <div class="forecast-wrap" style="margin-top:8px">
+          <div id="forecastCanvas" class="forecast-canvas">
+            <canvas id="forecastChart" style="width:100%;height:320px"></canvas>
+          </div>
+          <div style="display:flex; gap:8px">
+            <button id="stepNext">Nächste Säule</button>
+            <button id="stepPrev" class="secondary">Zurück</button>
+            <div class="muted right">Parteinamen sind weiß; Prozentwerte oben außerhalb.</div>
+          </div>
+        </div>
+      </div>
+
+      <hr style="border:none;border-top:1px solid rgba(255,255,255,0.04); margin:12px 0">
+
+      <!-- SITZVERTEILUNG (Halbkreis) -->
+      <div>
+        <h3 style="margin:0 0 8px">Sitzverteilung</h3>
+        <svg id="seatChart" viewBox="0 0 900 650" preserveAspectRatio="xMidYMin meet"></svg>
+      </div>
+
+      <hr style="border:none;border-top:1px solid rgba(255,255,255,0.04); margin:12px 0">
+
+      <!-- STICHWAHL -->
+      <div>
+        <h3 style="margin:0 0 8px">Stichwahl (2 Kandidaten)</h3>
+        <div class="muted">Einfach zwei Kandidaten anlegen, Farben & Prozent eintragen — per Klick animiert.</div>
+
+        <div style="margin-top:8px">
+          <div class="runoff-slot">
+            <input id="r1_name" type="text" placeholder="Kandidat A (Name)" value="Kandidat A" style="width:160px">
+            <input id="r1_party" type="text" placeholder="Partei (optional)" value="Partei 1" style="width:120px">
+            <input id="r1_color" type="color" value="#0b67c3">
+            <div class="runoff-bar" id="r1_bar"><div class="runoff-fill" id="r1_fill"></div><div class="runoff-label" id="r1_label">0%</div></div>
+            <input id="r1_pct" type="number" value="52" min="0" max="100" style="width:70px">
+          </div>
+
+          <div class="runoff-slot">
+            <input id="r2_name" type="text" placeholder="Kandidat B (Name)" value="Kandidat B" style="width:160px">
+            <input id="r2_party" type="text" placeholder="Partei (optional)" value="Partei 2" style="width:120px">
+            <input id="r2_color" type="color" value="#c31717">
+            <div class="runoff-bar" id="r2_bar"><div class="runoff-fill" id="r2_fill"></div><div class="runoff-label" id="r2_label">0%</div></div>
+            <input id="r2_pct" type="number" value="48" min="0" max="100" style="width:70px">
+          </div>
+
+          <div class="runoff-controls" style="margin-top:8px">
+            <button id="runoffAnimate">Animieren (Klick)</button>
+            <button id="runoffReset" class="secondary">Reset</button>
+          </div>
+        </div>
+      </div>
+
+    </section>
+  </div>
+
+<script>
+/* =======================
+   Data & Presets
+   ======================= */
+
+const PRESETS = {
+  "Schwarz-Rot (Groko)": ["CDU/CSU","SPD"],
+  "Ampel": ["SPD","Grüne","FDP"],
+  "Jamaika": ["CDU/CSU","Grüne","FDP"],
+  "Schwarz-Grün": ["CDU/CSU","Grüne"]
+};
+
+/* minimal historische Beispiele (kann erweitert werden) */
+const HIST = {
+  "2021": [{"name":"SPD","pct":25.7,"color":"#E3000F"},{"name":"CDU/CSU","pct":24.1,"color":"#000000"},{"name":"Grüne","pct":14.8,"color":"#1FA12E"},{"name":"FDP","pct":11.5,"color":"#FFED00"},{"name":"AfD","pct":10.3,"color":"#009EE0"},{"name":"Linke","pct":4.9,"color":"#BE3075"}],
+  "2017": [{"name":"CDU/CSU","pct":32.9,"color":"#000000"},{"name":"SPD","pct":20.5,"color":"#E3000F"},{"name":"AfD","pct":12.6,"color":"#009EE0"},{"name":"FDP","pct":10.7,"color":"#FFED00"},{"name":"Grüne","pct":8.9,"color":"#1FA12E"},{"name":"Linke","pct":9.2,"color":"#BE3075"}]
+};
+
+/* default party list (editable) */
+const defaultParties = [
+  {name:"CDU/CSU", pct:28, color:"#000000"},
+  {name:"SPD", pct:18, color:"#E3000F"},
+  {name:"Grüne", pct:12, color:"#1FA12E"},
+  {name:"FDP", pct:6, color:"#FFED00"},
+  {name:"AfD", pct:16, color:"#009EE0"},
+  {name:"Linke", pct:8, color:"#BE3075"}
+];
+
+/* =======================
+   Utilities
+   ======================= */
+const $ = s => document.querySelector(s);
+const $$ = s => Array.from(document.querySelectorAll(s));
+function comma(v){ return (Number(v)||0).toFixed(1).replace(".", ","); }
+function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
+
+/* =======================
+   Party list UI
+   ======================= */
+
+const partyListEl = $("#partyList");
+const presetSel = $("#presetCoal");
+const historySel = $("#historyPreset");
+const majorityLbl = $("#majorityLbl");
+const coalSeatsLbl = $("#coalSeats");
+const coalMajorLbl = $("#coalMajor");
+
+function renderPartyRows(list){
+  partyListEl.innerHTML = "";
+  list.forEach((p, idx) => {
+    const row = document.createElement("div");
+    row.className = "party-row";
+    row.innerHTML = `
+      <div style="opacity:.7; text-align:center">${idx+1}</div>
+      <input class="pName" type="text" value="${escapeHtml(p.name)}">
+      <input class="pPct" type="number" value="${p.pct}" min="0" max="100" step="0.1">
+      <input class="pColor" type="color" value="${p.color}">
+      <div class="party-actions">
+        <button class="delBtn" title="Löschen">✕</button>
+      </div>
+    `;
+    partyListEl.appendChild(row);
+
+    row.querySelector(".delBtn").addEventListener("click", ()=>{ row.remove(); computeAndRender(); });
+    row.querySelectorAll("input").forEach(i => i.addEventListener("change", computeAndRender));
+  });
+}
+
+function getInputParties(){
+  return Array.from(partyListEl.querySelectorAll(".party-row")).map(r=>{
+    return {
+      name: r.querySelector(".pName").value.trim() || "Partei",
+      pct: clamp(parseFloat(r.querySelector(".pPct").value||0), 0, 100),
+      color: r.querySelector(".pColor").value || "#888"
+    };
+  }).filter(p => p.name.length>0);
+}
+
+function addParty(p){
+  const list = getInputParties();
+  list.push(p || {name:"Neue Partei", pct:0, color:"#888888"});
+  renderPartyRows(list);
+  computeAndRender();
+}
+
+/* init UI presets */
+function fillPresets(){
+  presetSel.innerHTML = `<option value="">— wählen —</option>` + Object.keys(PRESETS).map(k=>`<option>${k}</option>`).join("");
+  historySel.innerHTML = `<option value="">— wählen —</option>` + Object.keys(HIST).map(y=>`<option value="${y}">${y}</option>`).join("");
+}
+
+/* handle file import (csv: name,pct,color) */
+$("#fileIn").addEventListener("change", async (ev)=>{
+  const f = ev.target.files[0];
+  if(!f) return;
+  const txt = await f.text();
+  let parsed = [];
+  if(f.name.endsWith(".json")){
+    try{ parsed = JSON.parse(txt); } catch(e){ alert("JSON ungültig"); return; }
+  } else {
+    const rows = txt.trim().split(/\r?\n/).filter(Boolean);
+    parsed = rows.map(r=>{
+      const [name,pct,color] = r.split(",").map(s=>s?.trim());
+      return {name: name||"Partei", pct: parseFloat(pct)||0, color: color||"#888888"};
+    });
+  }
+  renderPartyRows(parsed);
+  computeAndRender();
+});
+
+/* add / reset buttons */
+$("#addParty").addEventListener("click", ()=> addParty());
+$("#resetDefault").addEventListener("click", ()=> { renderPartyRows(defaultParties); computeAndRender(); });
+
+/* history preset */
+$("#loadPreset").addEventListener("click", ()=>{
+  const y = historySel.value;
+  if(!y) return;
+  renderPartyRows(HIST[y]);
+  computeAndRender();
+});
+
+/* coalition preset */
+fillPresets();
+presetSel.addEventListener("change", ()=>{
+  const key = presetSel.value;
+  if(!key) return;
+  const names = PRESETS[key] || [];
+  // set selected coalition checkboxes based on current shown parties
+  const parties = getInputParties().map(p=>p.name);
+  selectedCoalition = new Set(names.filter(n => parties.includes(n)));
+  renderCoalitionChecklist();
+  computeAndRender();
+});
+
+/* =======================
+   Seat allocation (Sainte-Laguë / d'Hondt / Hare)
+   ======================= */
+
+function filterByThreshold(parties, threshold){
+  return parties.filter(p => (p.pct || 0) > 0 && (p.pct >= threshold));
+}
+
+function allocateSainteLague(parties, seats){
+  // parties: array with pct; returns seats array parallel
+  const Q = [];
+  parties.forEach((p,i)=>{
+    const v = p.pct * 1e6;
+    for(let k=0;k<seats+5;k++) Q.push({i, val: v/(k+0.5)});
+  });
+  Q.sort((a,b)=>b.val - a.val);
+  const res = new Array(parties.length).fill(0);
+  Q.slice(0,seats).forEach(q => res[q.i]++);
+  return res;
+}
+function allocateDhondt(parties,seats){
+  const Q=[];
+  parties.forEach((p,i)=>{
+    const v = p.pct * 1e6;
+    for(let k=1;k<=seats;k++) Q.push({i, val: v/k});
+  });
+  Q.sort((a,b)=>b.val - a.val);
+  const res = new Array(parties.length).fill(0);
+  Q.slice(0,seats).forEach(q => res[q.i]++);
+  return res;
+}
+function allocateHare(parties,seats){
+  const votes = parties.map(p=>p.pct);
+  const total = votes.reduce((a,b)=>a+b,0) || 1;
+  const quotas = votes.map(v => v/total * seats);
+  let base = quotas.map(q => Math.floor(q));
+  let assigned = base.reduce((a,b)=>a+b,0);
+  const rem = quotas.map((q,i)=>({i, r: q - Math.floor(q)})).sort((a,b)=>b.r - a.r);
+  for(let k=0; assigned < seats && k<rem.length; k++){
+    base[rem[k].i]++; assigned++;
+  }
+  return base;
+}
+
+function computeSeatsFor(parties, seats, method="sls", threshold=5){
+  // parties: [{name,pct,color}]
+  const filtered = filterByThreshold(parties, threshold);
+  if(filtered.length === 0) return parties.map(p => ({...p, seats:0}));
+  let counts;
+  if(method === "dhondt") counts = allocateDhondt(filtered, seats);
+  else if(method === "hare") counts = allocateHare(filtered, seats);
+  else counts = allocateSainteLague(filtered, seats);
+
+  // map back to full list
+  return parties.map(p => {
+    const idx = filtered.findIndex(f => f.name === p.name);
+    return {...p, seats: idx >= 0 ? counts[idx] : 0};
+  });
+}
+
+/* =======================
+   Seat chart (semi-circle)
+   ======================= */
+
+function arcPath(cx,cy,r1,r2,a0,a1){
+  // returns path d for donut segment between angles a0..a1 (radians)
+  const large = (a1 - a0) > Math.PI ? 1 : 0;
+  const x0 = cx + r1*Math.cos(a0), y0 = cy + r1*Math.sin(a0);
+  const x1 = cx + r1*Math.cos(a1), y1 = cy + r1*Math.sin(a1);
+  const x1i = cx + r2*Math.cos(a1), y1i = cy + r2*Math.sin(a1);
+  const x0i = cx + r2*Math.cos(a0), y0i = cy + r2*Math.sin(a0);
+  return `M ${x0} ${y0} A ${r1} ${r1} 0 ${large} 1 ${x1} ${y1} L ${x1i} ${y1i} A ${r2} ${r2} 0 ${large} 0 ${x0i} ${y0i} Z`;
+}
+
+function drawHalfRing(svgEl, partyData, totalSeats, coalitionSet){
+  // partyData: [{name,color,seats}]
+  const w = 900, h = 650;
+  const cx = w/2, cy = h * 0.86;
+  const outer = 280, width = 160, inner = outer - width;
+  svgEl.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  svgEl.innerHTML = "";
+  const g = document.createElementNS("http://www.w3.org/2000/svg","g");
+  g.setAttribute("transform", `translate(0,0)`);
+  svgEl.appendChild(g);
+
+  const sumSeats = partyData.reduce((a,b)=>a+(b.seats||0),0) || totalSeats || 1;
+  let start = Math.PI; // leftmost
+  partyData.forEach(p=>{
+    if((p.seats||0) <= 0) return;
+    const sweep = (p.seats / sumSeats) * Math.PI;
+    const path = document.createElementNS("http://www.w3.org/2000/svg","path");
+    const fillColor = coalitionSet && coalitionSet.has(p.name) ? p.color : "#2b3540";
+    path.setAttribute("d", arcPath(cx, cy, outer, inner, start, start + sweep));
+    path.setAttribute("fill", fillColor);
+    path.setAttribute("stroke", "rgba(255,255,255,0.06)");
+    path.setAttribute("stroke-width", "1");
+    path.setAttribute("data-name", p.name);
+    path.style.transition = "opacity .3s, transform .3s";
+    g.appendChild(path);
+    start += sweep;
+  });
+
+  // majority label
+  majorityLbl.textContent = String(Math.floor(totalSeats/2) + 1);
+}
+
+/* =======================
+   Legend & coalition UI
+   ======================= */
+
+let selectedCoalition = new Set();
+
+function renderLegend(parties){
+  const el = $("#legend");
+  el.innerHTML = "";
+  parties.forEach(p=>{
+    const node = document.createElement("div");
+    node.className = "item";
+    node.innerHTML = `<span style="width:12px;height:12px;border-radius:3px;background:${p.color};display:inline-block"></span>
+                      <strong style="margin-left:6px">${escapeHtml(p.name)}</strong> <span style="opacity:.8;margin-left:8px">${p.seats||0} Sitze</span>`;
+    el.appendChild(node);
+  });
+}
+
+function renderCoalitionChecklist(){
+  const wrap = $("#coalitionChecklist");
+  wrap.innerHTML = "";
+  const parties = getInputParties().filter(p=>p.pct>0);
+  parties.forEach(p=>{
+    const id = `coal-${cssSafe(p.name)}`;
+    const label = document.createElement("label");
+    label.style.display = "inline-flex";
+    label.style.gap = "8px";
+    label.style.alignItems = "center";
+    label.innerHTML = `<input type="checkbox" id="${id}" ${selectedCoalition.has(p.name)?"checked":""}> <span style="width:12px;height:12px;background:${p.color};display:inline-block;border-radius:2px"></span> ${escapeHtml(p.name)} (${Math.round(p.pct*10)/10}%)`;
+    wrap.appendChild(label);
+    label.querySelector("input").addEventListener("change", (e)=>{
+      if(e.target.checked) selectedCoalition.add(p.name); else selectedCoalition.delete(p.name);
+      recomputeCoalitionSum();
+      calcAndRender();
+    });
+  });
+}
+
+function recomputeCoalitionSum(){
+  const totalSeats = parseInt($("#totalSeats").value) || 0;
+  const data = window.__lastSeats || [];
+  const sum = data.reduce((a,p)=>(a + (selectedCoalition.has(p.name)?(p.seats||0):0)), 0);
+  coalSeatsLbl.textContent = String(sum);
+  const majority = Math.floor(totalSeats/2) + 1;
+  if(sum >= majority){ coalMajorLbl.textContent = "ja"; coalMajorLbl.style.color = "var(--ok)"; } 
+  else { coalMajorLbl.textContent = "nein"; coalMajorLbl.style.color = "var(--bad)"; }
+}
+
+/* =======================
+   Main compute & render
+   ======================= */
+
+function computeAndRender(){
+  const totalSeats = parseInt($("#totalSeats").value) || 0;
+  const threshold = parseFloat($("#threshold").value) || 0;
+  const parties = getInputParties();
+  // compute seats
+  const seats = computeSeatsFor(parties, totalSeats, "sls", threshold);
+  window.__lastSeats = seats; // store
+
+  // render seat ring using seats data
+  drawHalfRing($("#seatChart"), seats, totalSeats, selectedCoalition);
+
+  // render legend & checklist
+  renderLegend(seats);
+  renderCoalitionChecklist();
+  recomputeCoalitionSum();
+}
+
+/* =======================
+   Forecast (Chart.js) — click-to-animate next in input order
+   ======================= */
+
+let forecastChart = null;
+let forecastIndex = 0;
+let forecastList = [];
+let forecastAutoTimer = null;
+
+function buildForecastList(){
+  const parties = getInputParties().filter(p=> (p.pct||0) >= 0 );
+  // keep order as input
+  forecastList = parties.map(p => ({...p, shownPct:0}));
+}
+
+function initForecast(){
+  buildForecastList();
+  const ctx = $("#forecastChart").getContext("2d");
+  if(forecastChart) forecastChart.destroy();
+  forecastChart = new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels: forecastList.map(p => p.name),
+      datasets: [{
+        label: "Prognose",
+        data: forecastList.map(p => p.shownPct),
+        backgroundColor: forecastList.map(p => p.color),
+        borderColor: "transparent",
+        borderWidth: 0,
+        barThickness: 72,
+        maxBarThickness: 92,
+        categoryPercentage: 0.66,
+        barPercentage: 0.9
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { enabled: true },
+        datalabels: {
+          color: "#ffffff",
+          anchor: "end",
+          align: "end",
+          offset: -8,
+          clip: false,
+          font: { weight: "800", size: 14 },
+          formatter: (value) => value > 0 ? comma(value) + " %" : ""
+        }
+      },
+      scales: {
+        x: {
+          grid: { display: false },
+          ticks: { color: "#ffffff", font: { weight: "700", size: 13 } }
+        },
+        y: {
+          beginAtZero: true,
+          suggestedMax: Math.max(30, Math.ceil(Math.max(...forecastList.map(p=>p.pct||0)) + 5)),
+          grid: { display: false },
+          ticks: { color: "#ffffff", callback: v => v + "%" }
+        }
+      }
+    },
+    plugins: [ChartDataLabels]
+  });
+}
+
+function resetForecast(){
+  forecastIndex = 0;
+  forecastList.forEach(p => p.shownPct = 0);
+  if(forecastChart) {
+    forecastChart.data.datasets[0].data = forecastList.map(p=>0);
+    forecastChart.update();
+  }
+}
+
+function stepNextForecast(){
+  if(!forecastChart) return;
+  if(forecastIndex >= forecastList.length) return;
+  const p = forecastList[forecastIndex];
+  const target = Math.max(0, p.pct || 0);
+  const steps = 28;
+  let step = 0;
+  const timer = setInterval(()=>{
+    step++;
+    const cur = target * (step / steps);
+    forecastList[forecastIndex].shownPct = cur;
+    forecastChart.data.datasets[0].data[forecastIndex] = cur;
+    forecastChart.update();
+    if(step >= steps){ clearInterval(timer); forecastIndex++; }
+  }, 36);
+}
+function stepPrevForecast(){
+  if(!forecastChart) return;
+  if(forecastIndex <= 0) return;
+  forecastIndex--;
+  forecastList[forecastIndex].shownPct = 0;
+  forecastChart.data.datasets[0].data[forecastIndex] = 0;
+  forecastChart.update();
+}
+
+/* autoplay: sequential */
+function startAutoForecast(){
+  if(forecastAutoTimer) return;
+  forecastAutoTimer = setInterval(()=>{
+    if(forecastIndex >= forecastList.length) { stopAutoForecast(); return; }
+    stepNextForecast();
+  }, 1200);
+}
+function stopAutoForecast(){
+  if(forecastAutoTimer) { clearInterval(forecastAutoTimer); forecastAutoTimer = null; }
+}
+
+/* UI bindings for forecast */
+$("#openForecast").addEventListener("click", ()=>{
+  initForecast();
+  resetForecast();
+});
+$("#stepNext").addEventListener("click", ()=> {
+  if(!forecastChart) initForecast();
+  stepNextForecast();
+});
+$("#stepPrev").addEventListener("click", ()=> {
+  stepPrevForecast();
+});
+$("#resetPlay").addEventListener("click", ()=> {
+  resetForecast();
+  stopAutoForecast();
+});
+$("#autoPlay").addEventListener("click", ()=>{
+  if(!forecastChart) initForecast();
+  if(forecastAutoTimer){ stopAutoForecast(); $("#autoPlay").textContent = "Auto ▶"; }
+  else { startAutoForecast(); $("#autoPlay").textContent = "Stop ⏹"; }
+});
+
+/* =======================
+   Stichwahl (2 Kandidaten)
+   ======================= */
+
+function updateRunoffColorsAndLabels(){
+  const n1 = $("#r1_name").value || "Kandidat A";
+  const p1 = $("#r1_party").value || "";
+  const c1 = $("#r1_color").value || "#0b67c3";
+  const v1 = clamp(parseFloat($("#r1_pct").value||0), 0, 100);
+
+  const n2 = $("#r2_name").value || "Kandidat B";
+  const p2 = $("#r2_party").value || "";
+  const c2 = $("#r2_color").value || "#c31717";
+  const v2 = clamp(parseFloat($("#r2_pct").value||0), 0, 100);
+
+  // label text
+  $("#r1_label").textContent = comma(v1) + " %";
+  $("#r2_label").textContent = comma(v2) + " %";
+  // set colors
+  $("#r1_fill").style.background = `linear-gradient(90deg, ${c1} ${v1}%, rgba(0,0,0,0) ${v1}%)`;
+  $("#r2_fill").style.background = `linear-gradient(90deg, ${c2} ${v2}%, rgba(0,0,0,0) ${v2}%)`;
+}
+
+$("#r1_pct, #r2_pct, #r1_color, #r2_color, #r1_name, #r2_name").forEach = function(){};
+["#r1_pct","#r2_pct","#r1_color","#r2_color","#r1_name","#r2_name"].forEach(sel=>{
+  $(sel).addEventListener("input", ()=> {
+    // update only visuals (but not animate)
+    updateRunoffColorsAndLabels();
+  });
+});
+
+$("#runoffReset").addEventListener("click", ()=>{
+  $("#r1_fill").style.width = "0%";
+  $("#r2_fill").style.width = "0%";
+  $("#r1_label").textContent = "0%";
+  $("#r2_label").textContent = "0%";
+});
+
+$("#runoffAnimate").addEventListener("click", ()=>{
+  // animate fills to percentage; but bars themselves keep same dimension
+  const v1 = clamp(parseFloat($("#r1_pct").value||0), 0, 100);
+  const v2 = clamp(parseFloat($("#r2_pct").value||0), 0, 100);
+  const c1 = $("#r1_color").value || "#0b67c3";
+  const c2 = $("#r2_color").value || "#c31717";
+  // build fill widths with animation
+  $("#r1_fill").style.background = c1;
+  $("#r2_fill").style.background = c2;
+  $("#r1_fill").style.transition = "width .9s cubic-bezier(.2,.8,.2,1)";
+  $("#r2_fill").style.transition = "width .9s cubic-bezier(.2,.8,.2,1)";
+  $("#r1_fill").style.width = v1 + "%";
+  $("#r2_fill").style.width = v2 + "%";
+  // update labels during/after animation (simple)
+  $("#r1_label").textContent = comma(v1) + " %";
+  $("#r2_label").textContent = comma(v2) + " %";
+});
+
+/* clicking on runoff bar also animates */
+$("#r1_bar").addEventListener("click", ()=> $("#runoffAnimate").click());
+$("#r2_bar").addEventListener("click", ()=> $("#runoffAnimate").click());
+
+/* =======================
+   Helpers & init
+   ======================= */
+
+function cssSafe(name){ return name.replace(/\s+/g,"_").replace(/[^a-zA-Z0-9_]/g,""); }
+function escapeHtml(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+
+/* on DOM ready: render defaults */
+document.addEventListener("DOMContentLoaded", ()=>{
+  renderPartyRows(defaultParties);
+  computeAndRender();
+  fillPresets();
+  // forecast initial
+  initForecast();
+  resetForecast();
+  updateRunoffColorsAndLabels();
+});
+
+/* when any input changes recompute seats & visual */
+$("#totalSeats").addEventListener("change", computeAndRender);
+$("#threshold").addEventListener("change", computeAndRender);
+partyListEl.addEventListener("input", ()=> {
+  // Keep labels in forecast in sync: rebuild chart but don't auto animate
+  buildForecastList();
+  if(forecastChart) {
+    forecastChart.data.labels = forecastList.map(p=>p.name);
+    forecastChart.data.datasets[0].backgroundColor = forecastList.map(p=>p.color);
+    forecastChart.data.datasets[0].data = forecastList.map(p=>p.shownPct);
+    forecastChart.update();
+  }
+  renderCoalitionChecklist();
+  computeAndRender();
+});
+
+/* small UX: step on canvas click */
+$("#forecastChart").addEventListener("click", ()=> $("#stepNext").click() );
+
+/* allow preset history selection */
+historySel.addEventListener("change", ()=> { /* nothing until loaded */ });
+
+/* initial coalition checklist render */
+renderCoalitionChecklist();
+
+</script>
+</body>
+</html>
